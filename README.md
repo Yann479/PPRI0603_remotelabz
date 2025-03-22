@@ -4,7 +4,7 @@ VM-side of RemoteLabz v3 project (Symfony 6.4).
 
 # Requirements
 
-- Ubuntu 18.04
+- Ubuntu 20.04
 
 # Install
 
