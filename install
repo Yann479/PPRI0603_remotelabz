@@ -88,6 +88,8 @@ fi
 export SCRIPTPATH="$( cd "$(dirname "$0")" ; pwd -P )"
 export DEBIAN_FRONTEND=noninteractive
 export COMPOSER_ALLOW_SUPERUSER=1
+export PIP_ROOT_USER_ACTION=ignore # PPRI0603 : ignorer les avertissements liés à l'exécution de pip avec root
+
 SCRIPT=$(readlink -f "$0")
 SCRIPT_DIR=$(dirname "$SCRIPT")
 
@@ -95,13 +97,17 @@ debug "Running apt-get to grab required packages"
 apt-get install -y software-properties-common
 add-apt-repository -y ppa:ondrej/php # PPRI0603 : Ajout pour l'installation de PHP8.1
 apt-get update
-apt-get install -y ntp apache2 php8.1 php-ssh2 zip unzip qemu qemu-kvm openvswitch-switch git python3.9 python3-pip python3-openvswitch php8.1-xml php8.1-curl php8.1-amqp logrotate lxc screen build-essential cmake libjson-c-dev libwebsockets-dev curl exim4 sshpass expect python3.9-venv # PPRI0603 : Passage des modules PHP vers la version 8.1
+apt-get install -y ntp apache2 php8.1 php-ssh2 zip unzip qemu qemu-kvm openvswitch-switch git python3.9 python3-pip python3-openvswitch php8.1-xml php8.1-curl php8.1-amqp logrotate lxc screen build-essential cmake libjson-c-dev libwebsockets-dev curl exim4 sshpass expect # PPRI0603 : Passage des modules PHP vers la version 8.1
 
-# PPRI0603 : Ajout des lignes suivantes, afin de créer un environnement virtuel pour python (correction d'un problème rencontré avec numpy lors de l'utilisation du script)
-python3.9 -m venv "${REMOTELABZ_WORKER_PATH}/venv"
-source "${REMOTELABZ_WORKER_PATH}/venv/bin/activate"
-pip install --upgrade pip --no-warn-script-location
-pip install numpy redis --no-warn-script-location
+# PPRI0603 : Ajout des 8 lignes suivantes, afin de garantir l'installation de numpy (correction d'un problème rencontré avec numpy lors de l'utilisation du script)
+python3.9 -m pip install --upgrade pip
+python3.9 -m pip install setuptools wheel
+python3.9 -m pip install --no-cache-dir numpy==1.21.0
+if ! python3.9 -c "import numpy" &> /dev/null; then
+    apt-get update
+    apt-get install -y python3-numpy
+fi
+apt-get update
 
 
 phpenmod -v 8.1 dom
@@ -128,22 +134,23 @@ chgrp -R remotelabz-worker "${SCRIPTPATH}"
 chmod -R g+rwx "${SCRIPTPATH}"
 
 # ssh key
-# PPRI0603 : Création des répertoires/clés et configurations des droits s'ils n'existent pas (dans le cas d'une seconde exécution du script)
-if [ ! -d "/home/remotelabz-worker" ]; then
-    mkdir /home/remotelabz-worker
-fi
-
-if [ ! -d "/home/remotelabz-worker/.ssh" ]; then
-    mkdir /home/remotelabz-worker/.ssh
-    chown remotelabz-worker:remotelabz-worker /home/remotelabz-worker/.ssh
-    chmod 700 /home/remotelabz-worker/.ssh
-fi
-
-if [ ! -f "/home/remotelabz-worker/.ssh/id_rsa" ]; then
-    ssh-keygen -t rsa -b 4096 -f /home/remotelabz-worker/.ssh/id_rsa
-    chown remotelabz-worker:remotelabz-worker /home/remotelabz-worker/.ssh/id_rsa*
-    chmod 600 /home/remotelabz-worker/.ssh/id_rsa
-    cat /home/remotelabz-worker/.ssh/id_rsa.pub | sudo tee -a /home/remotelabz-worker/.ssh/authorized_keys
+# PPRI0603 : Demande de suppressoin du répertoire /home/remotelabz-worker s'il existe déjà
+if [ -d "/home/remotelabz-worker" ]; then
+    read -p "The /home/remotelabz-worker directory already exists. Do you want to delete it? (o/n) " reponse
+    if [[ $reponse == [oO] ]]; then
+        rm -rf /home/remotelabz-worker
+        mkdir /home/remotelabz-worker
+        mkdir /home/remotelabz-worker/.ssh
+        chown remotelabz-worker:remotelabz-worker /home/remotelabz-worker/.ssh
+        chmod 700 /home/remotelabz-worker/.ssh
+        ssh-keygen -t rsa -b 4096 -f /home/remotelabz-worker/.ssh/id_rsa
+        chown remotelabz-worker:remotelabz-worker /home/remotelabz-worker/.ssh/id_rsa*
+        chmod 600 /home/remotelabz-worker/.ssh/id_rsa
+        cat /home/remotelabz-worker/.ssh/id_rsa.pub | sudo tee -a /home/remotelabz-worker/.ssh/authorized_keys
+    else
+        echo "SSH keys cannot be created, please delete the remotelabz-worker directory."
+        read -p "Press Enter to continue ..."
+    fi
 fi
 
 
@@ -171,16 +178,13 @@ echo "OK ✔️"
 echo "Installing Composer"
 if ! [ $(command -v composer) ]; then
     cp composer.phar /usr/local/bin/composer
-    composer self-update
     echo "OK ✔️"
 else
   echo "Composer is already installed! Skipping."
 fi
 
-composer self-update # PPRI0603 : Ajout, mise à jour de composer
-
 echo "Downloading Composer packages"
-(cd "${SCRIPTPATH}" && composer install --no-progress)
+(cd "${SCRIPTPATH}" && composer install)
 chown -R remotelabz-worker:remotelabz-worker "${SCRIPTPATH}"/vendor
 chmod -R 777 "${SCRIPTPATH}"/vendor
 echo "OK ✔️"
